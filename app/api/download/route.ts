@@ -25,6 +25,26 @@ export async function GET(req: NextRequest) {
 
   const sb = getSupabaseServer(cookies)
 
+  // Require authenticated user
+  const { data: auth } = await sb.auth.getUser()
+  const email = auth.user?.email
+  if (!email) {
+    return new Response("Authentication required", { status: 401 })
+  }
+
+  // Enforce: user must have uploaded at least one document
+  const { count: userUploadCount, error: countError } = await sb
+    .from("materials")
+    .select("id", { count: "exact", head: true })
+    .eq("uploader_email", email)
+
+  if (countError) {
+    return new Response("Unable to verify permissions", { status: 400 })
+  }
+  if (!userUploadCount || userUploadCount < 1) {
+    return new Response("Please upload at least one semester-related document to unlock downloads.", { status: 403 })
+  }
+
   // Prefer storage path (most reliable). If only a URL is provided, try to derive path if it's a Supabase URL.
   let path = searchParams.get("path")
   const urlParam = searchParams.get("url")

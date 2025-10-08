@@ -8,6 +8,9 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Card, CardContent, CardFooter, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
+import { getSupabaseBrowser } from "@/lib/supabase/clients"
+import { useToast } from "@/hooks/use-toast"
+import Link from "next/link"
 
 const fetcher = (url: string) => fetch(url).then((r) => r.json())
 
@@ -15,6 +18,30 @@ export function MaterialsBrowser() {
   const [q, setQ] = React.useState("")
   const [semester, setSemester] = React.useState<string>("all")
   const [subject, setSubject] = React.useState("")
+  const [canDownload, setCanDownload] = React.useState<boolean | null>(null)
+  const { toast } = useToast()
+
+  // Check if current user has at least one upload
+  React.useEffect(() => {
+    const supabase = getSupabaseBrowser()
+    let mounted = true
+    ;(async () => {
+      const { data: auth } = await supabase.auth.getUser()
+      const email = auth.user?.email
+      if (!email) {
+        if (mounted) setCanDownload(false)
+        return
+      }
+      const { count } = await supabase
+        .from("materials")
+        .select("id", { count: "exact", head: true })
+        .eq("uploader_email", email)
+      if (mounted) setCanDownload((count ?? 0) > 0)
+    })()
+    return () => {
+      mounted = false
+    }
+  }, [])
 
   const params = new URLSearchParams()
   if (q) params.set("q", q)
@@ -55,6 +82,16 @@ export function MaterialsBrowser() {
         </div>
       </div>
 
+      {canDownload === false && (
+        <Card className="border-dashed">
+          <CardContent className="pt-6 text-sm text-muted-foreground">
+            To download materials, first upload at least one semester-related document.
+            <span className="ml-2" />
+            <Link href="/upload" className="underline underline-offset-4">Upload now</Link>
+          </CardContent>
+        </Card>
+      )}
+
       {isLoading ? (
         <div className="text-muted-foreground">Loading materials...</div>
       ) : !data?.items?.length ? (
@@ -80,6 +117,14 @@ export function MaterialsBrowser() {
 
             const suggestedName = `${m.book_name || "material"}.pdf`.replace(/[^\w.-]+/g, "-")
 
+            function guardAction(action: () => void) {
+              if (canDownload) return action()
+              toast({
+                title: "Upload required",
+                description: "Please upload at least one semester-related document to unlock downloads.",
+              })
+            }
+
             return (
               <Card key={m.id} className="transition-shadow hover:shadow-md">
                 <CardHeader>
@@ -93,15 +138,21 @@ export function MaterialsBrowser() {
                   <p className="text-sm text-muted-foreground">Uploaded by {m.uploader_email}</p>
                 </CardContent>
                 <CardFooter className="flex gap-2">
-                  <Button asChild size="sm" variant="default">
-                    <a href={viewHref} target="_blank" rel="noreferrer">
-                      View
-                    </a>
+                  <Button
+                    size="sm"
+                    variant="default"
+                    disabled={canDownload === false}
+                    onClick={() => guardAction(() => window.open(viewHref, "_blank", "noopener,noreferrer"))}
+                  >
+                    View
                   </Button>
-                  <Button asChild size="sm" variant="outline">
-                    <a href={downloadHref} download={suggestedName}>
-                      Download
-                    </a>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    disabled={canDownload === false}
+                    onClick={() => guardAction(() => (window.location.href = downloadHref))}
+                  >
+                    Download
                   </Button>
                 </CardFooter>
               </Card>
