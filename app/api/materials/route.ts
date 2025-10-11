@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server"
 import { getSupabaseServer } from "@/lib/supabase/clients"
 import { cookies } from "next/headers"
-import { Resend } from "resend"
+import { sendUploadNotification } from "@/lib/email"
 
 // Ensure this route is always dynamic and never statically cached
 export const dynamic = "force-dynamic"
@@ -14,7 +14,8 @@ export async function GET(request: Request) {
   const semester = url.searchParams.get("semester")
   const subject = url.searchParams.get("subject") || ""
 
-  const supabase = getSupabaseServer(cookies)
+  const cookieStore: any = await (cookies() as any)
+  const supabase = getSupabaseServer(() => cookieStore)
   let query = supabase.from("materials").select("*").order("created_at", { ascending: false })
 
   if (semester && semester !== "all") query = query.eq("semester", Number(semester))
@@ -54,7 +55,8 @@ export async function GET(request: Request) {
 
       if (storagePath) {
         const { data: signed, error: signErr } = await supabase.storage.from("materials").createSignedUrl(storagePath, 60)
-        if (signErr || !signed) return null // missing in storage
+        // Be lenient: if signing fails, still keep the item so it shows up in UI
+        if (signErr || !signed) return m
         return m
       }
 
@@ -76,12 +78,22 @@ export async function GET(request: Request) {
 
 export async function POST(request: Request) {
   const body = await request.json()
-  const supabase = getSupabaseServer(cookies)
+  const cookieStore: any = await (cookies() as any)
+  const supabase = getSupabaseServer(() => cookieStore)
 
   const { data: auth } = await supabase.auth.getUser()
   const email = auth.user?.email ?? body.uploader_email ?? "anonymous@user"
 
   const { book_name, subject, semester, file_url } = body
+
+  // Minimal validation: require file_url and book_name
+  if (!file_url || typeof file_url !== "string") {
+    return NextResponse.json({ error: "Missing file_url" }, { status: 400 })
+  }
+  if (!book_name || typeof book_name !== "string") {
+    return NextResponse.json({ error: "Missing book_name" }, { status: 400 })
+  }
+
   const { data, error } = await supabase
     .from("materials")
     .insert({
@@ -96,50 +108,21 @@ export async function POST(request: Request) {
 
   if (error) return NextResponse.json({ error: error.message }, { status: 400 })
 
-  // Fire-and-forget email notification using Resend. Do not block or fail the request.
+  // Best-effort email notification. Only for PDFs. Does not block response.
   try {
-    const apiKey = process.env.RESEND_API_KEY
-    const to = process.env.EMAIL_TO
-    const from = process.env.EMAIL_FROM || "onboarding@resend.dev"
     const isPdf = typeof file_url === "string" && /\.pdf(\?.*)?$/i.test(file_url)
-    if (apiKey && to && from && isPdf) {
-      const resend = new Resend(apiKey)
-      const when = new Date().toISOString()
-      const subjectLine = `Material upload: ${book_name ?? "(no title)"}`
-      const html = `
-    <div style="font-family:system-ui,-apple-system,Segoe UI,Roboto,Ubuntu,Cantarell,Noto Sans,sans-serif;line-height:1.6">
-      <h2>New material uploaded</h2>
-      <p><strong>Uploader:</strong> ${email}</p>
-      <p><strong>Book:</strong> ${book_name ?? ""}</p>
-      <p><strong>Subject:</strong> ${subject ?? ""}</p>
-      <p><strong>Semester:</strong> ${semester ?? ""}</p>
-      <p><strong>When:</strong> ${when}</p>
-      <p><strong>File:</strong> <a href="${file_url ?? ""}">${file_url ?? ""}</a></p>
-    </div>
-  `
-      const text = [
-        "NEW MATERIAL UPLOADED",
-        "",
-        `Uploader: ${email}`,
-        "",
-        `Book: ${book_name ?? ""}`,
-        "",
-        `Subject: ${subject ?? ""}`,
-        "",
-        `Semester: ${semester ?? ""}`,
-        "",
-        `When: ${when}`,
-        "",
-        `File: ${file_url ?? ""}`,
-      ].join("\n")
-      await resend.emails.send({ from, to, subject: subjectLine, html, text })
-    } else {
-      console.warn(
-        "Email notification skipped: missing env vars or file is not a PDF."
-      )
+    if (isPdf) {
+      await sendUploadNotification({
+        book_name,
+        subject: subject ?? null,
+        semester: semester ?? null,
+        file_url,
+        uploader_email: email,
+        created_at: data?.created_at,
+      })
     }
   } catch (e) {
-    console.error("Failed to send upload notification email:", e)
+    // logged inside helper; ignore
   }
   return NextResponse.json({ item: data }, { status: 201 })
 }

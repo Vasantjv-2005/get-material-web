@@ -1,4 +1,5 @@
 import { createBrowserClient, createServerClient, type CookieOptions } from "@supabase/ssr"
+import type { cookies as CookiesFn } from "next/headers"
 
 let browserClient: ReturnType<typeof createBrowserClient> | null = null
 
@@ -21,29 +22,25 @@ export function getSupabaseBrowser() {
 }
 
 export function getSupabaseServer(cookiesSource: any) {
-  // Each request should create its own server client with cookies proxy
+  // Build a cookies adapter compatible with current @supabase/ssr expectations.
+  // Supports both get/set/remove and getAll/setAll.
+  const getStore = () => (typeof cookiesSource === "function" ? (cookiesSource as unknown as typeof CookiesFn)() : cookiesSource)
   return createServerClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
     cookies: {
-      get(name: string) {
+      // Implement CookieMethodsServer: getAll/setAll only
+      getAll() {
         try {
-          const store: any = typeof cookiesSource === "function" ? (cookiesSource as any)() : (cookiesSource as any)
-          return store?.get?.(name)?.value
+          const store: any = getStore()
+          const all = store?.getAll?.() || []
+          return all.map((c: any) => ({ name: c.name, value: c.value }))
         } catch {
-          return undefined
+          return []
         }
       },
-      set(name: string, value: string, options: CookieOptions) {
+      setAll(cookiesToSet: { name: string; value: string; options: CookieOptions }[]) {
         try {
-          const store: any = typeof cookiesSource === "function" ? (cookiesSource as any)() : (cookiesSource as any)
-          store?.set?.({ name, value, ...options })
-        } catch {
-          // noop in environments where setting cookies is not available
-        }
-      },
-      remove(name: string, options: CookieOptions) {
-        try {
-          const store: any = typeof cookiesSource === "function" ? (cookiesSource as any)() : (cookiesSource as any)
-          store?.set?.({ name, value: "", ...options })
+          const store: any = getStore()
+          for (const c of cookiesToSet) store?.set?.(c)
         } catch {
           // noop
         }
