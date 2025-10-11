@@ -12,7 +12,7 @@ import { getSupabaseBrowser } from "@/lib/supabase/clients"
 import { useToast } from "@/hooks/use-toast"
 import Link from "next/link"
 
-const fetcher = (url: string) => fetch(url).then((r) => r.json())
+const fetcher = (url: string) => fetch(url, { cache: "no-store" }).then((r) => r.json())
 
 export function MaterialsBrowser() {
   const [q, setQ] = React.useState("")
@@ -48,7 +48,14 @@ export function MaterialsBrowser() {
   if (semester !== "all") params.set("semester", semester)
   if (subject) params.set("subject", subject)
 
-  const { data, isLoading } = useSWR(`/api/materials?${params.toString()}`, fetcher)
+  const { data, isLoading } = useSWR(`/api/materials?${params.toString()}`,
+    fetcher,
+    {
+      revalidateOnFocus: true,
+      revalidateOnReconnect: true,
+      refreshInterval: 15000,
+    }
+  )
 
   return (
     <div className="grid gap-6">

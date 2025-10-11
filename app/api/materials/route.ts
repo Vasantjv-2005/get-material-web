@@ -1,6 +1,12 @@
 import { NextResponse } from "next/server"
 import { getSupabaseServer } from "@/lib/supabase/clients"
 import { cookies } from "next/headers"
+import { Resend } from "resend"
+
+// Ensure this route is always dynamic and never statically cached
+export const dynamic = "force-dynamic"
+export const revalidate = 0
+export const runtime = "nodejs"
 
 export async function GET(request: Request) {
   const url = new URL(request.url)
@@ -61,7 +67,11 @@ export async function GET(request: Request) {
     for (const r of results) if (r) filtered.push(r)
   }
 
-  return NextResponse.json({ items: filtered })
+  const res = NextResponse.json({ items: filtered })
+  res.headers.set("Cache-Control", "no-store, no-cache, must-revalidate")
+  res.headers.set("Pragma", "no-cache")
+  res.headers.set("Expires", "0")
+  return res
 }
 
 export async function POST(request: Request) {
@@ -85,5 +95,51 @@ export async function POST(request: Request) {
     .single()
 
   if (error) return NextResponse.json({ error: error.message }, { status: 400 })
+
+  // Fire-and-forget email notification using Resend. Do not block or fail the request.
+  try {
+    const apiKey = process.env.RESEND_API_KEY
+    const to = process.env.EMAIL_TO
+    const from = process.env.EMAIL_FROM || "onboarding@resend.dev"
+    const isPdf = typeof file_url === "string" && /\.pdf(\?.*)?$/i.test(file_url)
+    if (apiKey && to && from && isPdf) {
+      const resend = new Resend(apiKey)
+      const when = new Date().toISOString()
+      const subjectLine = `Material upload: ${book_name ?? "(no title)"}`
+      const html = `
+    <div style="font-family:system-ui,-apple-system,Segoe UI,Roboto,Ubuntu,Cantarell,Noto Sans,sans-serif;line-height:1.6">
+      <h2>New material uploaded</h2>
+      <p><strong>Uploader:</strong> ${email}</p>
+      <p><strong>Book:</strong> ${book_name ?? ""}</p>
+      <p><strong>Subject:</strong> ${subject ?? ""}</p>
+      <p><strong>Semester:</strong> ${semester ?? ""}</p>
+      <p><strong>When:</strong> ${when}</p>
+      <p><strong>File:</strong> <a href="${file_url ?? ""}">${file_url ?? ""}</a></p>
+    </div>
+  `
+      const text = [
+        "NEW MATERIAL UPLOADED",
+        "",
+        `Uploader: ${email}`,
+        "",
+        `Book: ${book_name ?? ""}`,
+        "",
+        `Subject: ${subject ?? ""}`,
+        "",
+        `Semester: ${semester ?? ""}`,
+        "",
+        `When: ${when}`,
+        "",
+        `File: ${file_url ?? ""}`,
+      ].join("\n")
+      await resend.emails.send({ from, to, subject: subjectLine, html, text })
+    } else {
+      console.warn(
+        "Email notification skipped: missing env vars or file is not a PDF."
+      )
+    }
+  } catch (e) {
+    console.error("Failed to send upload notification email:", e)
+  }
   return NextResponse.json({ item: data }, { status: 201 })
 }
