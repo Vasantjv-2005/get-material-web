@@ -19,57 +19,81 @@ export function UploadForm() {
   const [semester, setSemester] = React.useState<number | null>(null)
   const [file, setFile] = React.useState<File | null>(null)
   const [loading, setLoading] = React.useState(false)
+  const [inlineMsg, setInlineMsg] = React.useState("")
 
   async function onSubmit(e: React.FormEvent) {
     e.preventDefault()
+    // Basic validations
     if (!file) {
       toast({ title: "Select a PDF", description: "Please choose a PDF file to upload.", variant: "destructive" })
+      setInlineMsg("Please choose a PDF file to upload.")
       return
     }
-    if (!bookName || !subject || !semester) {
-      toast({ title: "Missing details", description: "Fill in book, subject and semester.", variant: "destructive" })
+    if (!bookName) {
+      toast({ title: "Missing details", description: "Enter a book name.", variant: "destructive" })
+      setInlineMsg("Enter a book name.")
+      return
+    }
+    const typeOk = file.type === "application/pdf"
+    const nameOk = file.name.toLowerCase().endsWith(".pdf")
+    if (!typeOk || !nameOk) {
+      toast({ title: "PDF required", description: "Upload a .pdf file only.", variant: "destructive" })
+      setInlineMsg("Only .pdf files are allowed.")
       return
     }
 
     setLoading(true)
     try {
-      const { data: user } = await supabase.auth.getUser()
-      const email = user.user?.email ?? "anonymous@user"
+      // Auth check
+      const { data: authData } = await supabase.auth.getUser()
+      const user = authData.user
+      if (!user?.email) {
+        toast({ title: "Login required", description: "Please log in before uploading.", variant: "destructive" })
+        setInlineMsg("Please log in to upload PDFs.")
+        return
+      }
 
-      const ext = file.name.split(".").pop()?.toLowerCase() || "pdf"
+      // Upload to Storage
       const fileNameSafe = file.name.replace(/\s+/g, "-").replace(/[^a-zA-Z0-9.\-_]/g, "")
-      const key = `${user.user?.id ?? "anon"}/${Date.now()}-${fileNameSafe}`
-
+      const key = `${user.id ?? "anon"}/${Date.now()}-${fileNameSafe}`
       const { error: uploadError } = await supabase.storage.from("materials").upload(key, file, {
         contentType: "application/pdf",
         upsert: false,
       })
       if (uploadError) throw uploadError
 
+      // Get public URL (fallback to key if not public)
       const { data: publicUrlData } = supabase.storage.from("materials").getPublicUrl(key)
-      const publicUrl = publicUrlData?.publicUrl
+      const publicUrl = publicUrlData?.publicUrl || key
 
-      // Insert metadata
-      const { error: insertError } = await supabase.from("materials").insert({
-        book_name: bookName,
-        subject,
-        semester,
-        file_url: publicUrl ?? key,
-        uploader_email: email,
+      // Insert row via API
+      const resp = await fetch("/api/materials", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          book_name: bookName,
+          subject: subject || "",
+          semester: semester || null,
+          file_url: publicUrl,
+        }),
       })
-      if (insertError) throw insertError
+      if (!resp.ok) {
+        const j = await resp.json().catch(() => ({}))
+        throw new Error(j?.error || `Upload failed with status ${resp.status}`)
+      }
 
       toast({ title: "Uploaded!", description: "Your PDF is now available." })
-      router.push("/materials")
-
-      // Reset
+      setInlineMsg("")
+      // Reset and go to materials
       setBookName("")
       setSubject("")
       setSemester(null)
       setFile(null)
+      router.push("/materials")
     } catch (err: any) {
       console.log("[v0] Upload error:", err?.message)
       toast({ title: "Upload failed", description: err?.message ?? "Unknown error", variant: "destructive" })
+      setInlineMsg(err?.message || "Upload failed.")
     } finally {
       setLoading(false)
     }
@@ -88,13 +112,13 @@ export function UploadForm() {
           </div>
           <div className="grid gap-2">
             <Label htmlFor="subject">Subject</Label>
-            <Input id="subject" value={subject} onChange={(e) => setSubject(e.target.value)} required />
+            <Input id="subject" value={subject} onChange={(e) => setSubject(e.target.value)} />
           </div>
           <div className="grid gap-2">
             <Label>Semester</Label>
             <Select value={semester?.toString() ?? ""} onValueChange={(v) => setSemester(Number.parseInt(v, 10))}>
               <SelectTrigger>
-                <SelectValue placeholder="Select semester" />
+                <SelectValue placeholder="Select semester (optional)" />
               </SelectTrigger>
               <SelectContent>
                 {Array.from({ length: 8 }).map((_, i) => (
@@ -115,6 +139,7 @@ export function UploadForm() {
           <Button type="submit" className="rounded-lg" disabled={loading}>
             {loading ? "Uploading..." : "Upload"}
           </Button>
+          {inlineMsg && <p className="text-sm text-red-600 mt-1">{inlineMsg}</p>}
         </form>
       </CardContent>
     </Card>

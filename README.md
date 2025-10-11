@@ -48,10 +48,25 @@ Set these in `.env.local` for local development.
 ```
 NEXT_PUBLIC_SUPABASE_URL=your_supabase_url
 NEXT_PUBLIC_SUPABASE_ANON_KEY=your_supabase_anon_key
+# Email (Resend)
+RESEND_API_KEY=your_resend_api_key
+RESEND_FROM_EMAIL=no-reply@your-domain.com
+RESEND_TO_EMAIL=vasantjv2005@gmail.com
 ```
 
 Notes:
 - The repo currently includes fallback values in `lib/supabase/clients.ts`. For production, always use your own project values via env vars.
+
+### Email Notifications
+- The API `POST /api/materials` will send a best-effort email notification after a successful insert.
+- Provider: Resend (package `resend`).
+- Configure via env vars above. If `RESEND_API_KEY` is missing, the email step is skipped silently.
+- Email content includes `uploader_email`, `book_name`, `subject`, `semester`, `file_url`, and timestamp.
+
+Setup steps:
+1. `npm install` (to install `resend`)
+2. Set env vars in `.env.local`.
+3. Optionally verify your sending domain in Resend and set `RESEND_FROM_EMAIL` accordingly.
 
 ## Install & Run
 
